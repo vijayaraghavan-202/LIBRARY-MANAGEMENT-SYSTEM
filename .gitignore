@@ -1,0 +1,22 @@
+target/
+.mvn/wrapper/maven-wrapper.jar
+
+### IDE files ###
+.idea/
+*.iws
+*.iml
+*.ipr
+.vscode/
+
+### OS files ###
+.DS_Store
+Thumbs.db
+
+### Logs ###
+*.log
+
+### Env files ###
+.env
+.env.*
+!.env.example
+application-local.properties
