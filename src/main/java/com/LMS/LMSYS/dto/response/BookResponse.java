@@ -23,4 +23,3 @@ public class BookResponse {
     private Integer availableCopies;
 }
 
-

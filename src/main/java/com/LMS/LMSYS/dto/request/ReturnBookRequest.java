@@ -12,17 +12,11 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+public class ReturnBookRequest {
 
-public class BorrowRequest {
+    @NotNull(message = "Borrow ID is required")
+    private Long borrowId;
 
-    @NotNull(message = "Book id is required")
-    private Long bookId;
-
-    @NotNull(message = "Member id is required")
+    @NotNull(message = "Member ID is required")
     private Long memberId;
-    
-    
 }
-
-
-

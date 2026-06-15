@@ -1,6 +1,7 @@
 package com.LMS.LMSYS.service;
 
 import com.LMS.LMSYS.dto.request.BorrowRequest;
+import com.LMS.LMSYS.dto.request.ReturnBookRequest;
 import com.LMS.LMSYS.dto.response.BorrowRecordResponse;
 import com.LMS.LMSYS.entity.Book;
 import com.LMS.LMSYS.entity.BorrowRecord;
@@ -9,6 +10,7 @@ import com.LMS.LMSYS.exception.BadRequestException;
 import com.LMS.LMSYS.exception.ConflictException;
 import com.LMS.LMSYS.exception.ResourceNotFoundException;
 import com.LMS.LMSYS.mapper.BorrowRecordMapper;
+import com.LMS.LMSYS.policy.LendingPolicy;
 import com.LMS.LMSYS.repository.BookRepository;
 import com.LMS.LMSYS.repository.BorrowRecordRepository;
 import com.LMS.LMSYS.repository.MemberRepository;
@@ -36,8 +38,8 @@ public class BorrowService {
 
     @Transactional
     public BorrowRecordResponse borrowBook(BorrowRequest request) {
-        Book book = bookRepository.findById(request.getBookId())
-                .orElseThrow(() -> new ResourceNotFoundException("Book not found with id: " + request.getBookId()));
+        Book book = bookRepository.findBookForUpdateById(request.getBookId())
+                .orElseThrow(() -> new NullPointerException("Book not found with id: " + request.getBookId()));
 
         Member member = memberRepository.findById(request.getMemberId())
                 .orElseThrow(() -> new ResourceNotFoundException("Member not found with id: " + request.getMemberId()));
@@ -54,9 +56,15 @@ public class BorrowService {
             throw new ConflictException("Member already borrowed this book and has not returned it");
         }
 
+        long activeBorrowCount = borrowRecordRepository.countByMemberIdAndReturnDateIsNull(member.getId());
+
+if (activeBorrowCount >= LendingPolicy.MAX_ACTIVE_BORROWS_PER_MEMBER) {
+    throw new ConflictException("Member cannot borrow more than 5 books at a time");
+}
+
         book.setAvailableCopies(availableCopies - 1);
         bookRepository.save(book);
-// entity  
+
         BorrowRecord borrowRecord = BorrowRecord.builder()
                 .book(book)
                 .member(member)
@@ -69,17 +77,22 @@ public class BorrowService {
     }
 
     @Transactional
-    public BorrowRecordResponse returnBook(Long borrowId) {
-        BorrowRecord borrowRecord = borrowRecordRepository.findById(borrowId)
-                .orElseThrow(() -> new ResourceNotFoundException("Borrow record not found with id: " + borrowId));
+    public BorrowRecordResponse returnBook(ReturnBookRequest request) {
+        Long bookId = borrowRecordRepository.findBookIdById(request.getBorrowId())
+                .orElseThrow(() -> new ResourceNotFoundException("Borrow record not found with id: " + request.getBorrowId()));
 
-        if (borrowRecord.getReturnDate() != null) {
-            throw new BadRequestException("Borrow record is already returned");
+        Book book = bookRepository.findBookForUpdateById(bookId)
+                .orElseThrow(() -> new ResourceNotFoundException("Book not found for borrow record id: " + request.getBorrowId()));
+
+        BorrowRecord borrowRecord = borrowRecordRepository.findBorrowRecordForUpdateById(request.getBorrowId())
+                .orElseThrow(() -> new ResourceNotFoundException("Borrow record not found with id: " + request.getBorrowId()));
+
+        if (!borrowRecord.getMember().getId().equals(request.getMemberId())) {
+            throw new BadRequestException("Borrow record does not belong to this member");
         }
 
-        Book book = borrowRecord.getBook();
-        if (book == null) {
-            throw new ResourceNotFoundException("Book not found for borrow record id: " + borrowId);
+        if (borrowRecord.getReturnDate() != null) {
+            throw new BadRequestException("Book already returned");
         }
 
         int currentAvailableCopies = book.getAvailableCopies() == null ? 0 : book.getAvailableCopies();
@@ -94,7 +107,7 @@ public class BorrowService {
 
     private Integer getFineAmount(LocalDate borrowDate, LocalDate returnDate) {
         long borrowedDays = ChronoUnit.DAYS.between(borrowDate, returnDate);
-        long lateDays = borrowedDays - 14;
+        long lateDays = borrowedDays - LendingPolicy.LOAN_PERIOD_DAYS;
 
         if (lateDays <= 0) {
             return 0;

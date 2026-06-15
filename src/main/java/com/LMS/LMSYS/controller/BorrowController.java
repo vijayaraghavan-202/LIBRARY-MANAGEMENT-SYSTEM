@@ -1,6 +1,7 @@
 package com.LMS.LMSYS.controller;
 
 import com.LMS.LMSYS.dto.request.BorrowRequest;
+import com.LMS.LMSYS.dto.request.ReturnBookRequest;
 import com.LMS.LMSYS.dto.response.BorrowRecordResponse;
 import com.LMS.LMSYS.service.BorrowService;
 import jakarta.validation.Valid;
@@ -29,9 +30,9 @@ public class BorrowController {
         return ResponseEntity.status(HttpStatus.CREATED).body(borrowService.borrowBook(request));
     }
 
-    @PostMapping("/return/{borrowId}")
-    public ResponseEntity<BorrowRecordResponse> returnBook(@PathVariable Long borrowId) {
-        return ResponseEntity.ok(borrowService.returnBook(borrowId));
+    @PostMapping("/return")
+    public ResponseEntity<BorrowRecordResponse> returnBook(@Valid @RequestBody ReturnBookRequest request) {
+        return ResponseEntity.ok(borrowService.returnBook(request));
     }
 
     @GetMapping("/borrow-records")

@@ -2,6 +2,7 @@ package com.LMS.LMSYS.controller;
 
 import com.LMS.LMSYS.dto.request.MemberRequest;
 import com.LMS.LMSYS.dto.response.BorrowRecordResponse;
+import com.LMS.LMSYS.dto.response.MemberRegistrationResponse;
 import com.LMS.LMSYS.dto.response.MemberResponse;
 import com.LMS.LMSYS.service.BorrowService;
 import com.LMS.LMSYS.service.MemberService;
@@ -33,8 +34,8 @@ public class MemberController {
         return ResponseEntity.ok(memberService.getAllMembers());
     }
 
-    @PostMapping
-    public ResponseEntity<MemberResponse> registerMember(@Valid @RequestBody MemberRequest request) {
+    @PostMapping("/register")
+    public ResponseEntity<MemberRegistrationResponse> registerMember(@Valid @RequestBody MemberRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(memberService.registerMember(request));
     }
     
