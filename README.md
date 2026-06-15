@@ -39,7 +39,14 @@ All other endpoints require:
 Authorization: Bearer <jwt-token>
 ```
 
-Login uses `AuthenticationManager`, `DaoAuthenticationProvider`, `UserDetailsService`, and BCrypt password verification. Successful login returns a JWT and stores the token's `jti` as the member's active token ID. Logging in again replaces the active token ID, so the older token is rejected. Logout clears the active token ID.
+The single login endpoint accepts both member and admin credentials. Member login uses `AuthenticationManager`, `DaoAuthenticationProvider`, `UserDetailsService`, and BCrypt password verification. Admin login checks the `admins` table and returns an admin JWT. Successful login returns a JWT and stores the token's `jti` as the account's active token ID. Logging in again replaces the active token ID, so the older token is rejected. Logout clears the active token ID.
+
+Book write operations are admin-only:
+
+- `POST /api/books`
+- `PUT /api/books/{id}`
+- `PATCH /api/books/**`
+- `DELETE /api/books/{id}`
 
 ## Frontend Integration Notes
 
@@ -49,7 +56,7 @@ Login uses `AuthenticationManager`, `DaoAuthenticationProvider`, `UserDetailsSer
 - The API returns JSON request and response bodies.
 - Dates are returned as ISO date strings, for example `2026-06-01`.
 - Validation and business errors return a consistent error object.
-- Member login uses email because email is unique.
+- Login uses email because email is unique for member/admin accounts.
 - Passwords are stored only as BCrypt hashes and are never returned in responses.
 
 Example frontend environment variable:
@@ -75,10 +82,11 @@ src/main/java/com/LMS/LMSYS
 |   |-- request
 |   |   |-- BookRequest.java
 |   |   |-- BorrowRequest.java
-|   |   |-- MemberLoginRequest.java
+|   |   |-- LoginRequest.java
 |   |   |-- MemberRequest.java
 |   |   `-- ReturnBookRequest.java
 |   `-- response
+|       |-- AdminLoginResponse.java
 |       |-- ApiErrorResponse.java
 |       |-- BookResponse.java
 |       |-- BorrowRecordResponse.java
@@ -87,6 +95,7 @@ src/main/java/com/LMS/LMSYS
 |       |-- MemberResponse.java
 |       `-- NotificationResponse.java
 |-- entity
+|   |-- Admin.java
 |   |-- Book.java
 |   |-- BorrowRecord.java
 |   |-- Member.java
@@ -106,11 +115,13 @@ src/main/java/com/LMS/LMSYS
 |-- policy
 |   `-- LendingPolicy.java
 |-- repository
+|   |-- AdminRepository.java
 |   |-- BookRepository.java
 |   |-- BorrowRecordRepository.java
 |   |-- MemberRepository.java
 |   `-- NotificationRepository.java
 |-- service
+|   |-- AdminAuthService.java
 |   |-- AuthService.java
 |   |-- BookService.java
 |   |-- BorrowService.java
@@ -163,6 +174,16 @@ The application follows a layered architecture:
 | `current_token_id` | `VARCHAR(255)` | Active JWT `jti`; used to enforce one active token per member |
 | `member_since` | `DATE` | Required, set during registration |
 
+### `admins`
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `BIGINT` | Primary key |
+| `name` | `VARCHAR(255)` | Required |
+| `email` | `VARCHAR(255)` | Required, unique |
+| `password` | `VARCHAR(255)` | BCrypt hash |
+| `current_token_id` | `VARCHAR(255)` | Active JWT `jti`; used to enforce one active token per admin |
+
 ### `borrow_records`
 
 | Column | Type | Notes |
@@ -188,7 +209,7 @@ There is a unique partial index that prevents a member from actively borrowing t
 | `is_read` | `BOOLEAN` | Required, defaults to `false` |
 | `is_dismissed` | `BOOLEAN` | Required, defaults to `false` |
 
-Database tables are created by `src/main/resources/schema.sql`.
+Core application tables are created by `src/main/resources/schema.sql`. The `admins` table must also exist in the configured database for admin login.
 
 Hibernate DDL generation is disabled with:
 
@@ -198,7 +219,7 @@ spring.jpa.hibernate.ddl-auto=none
 
 ## Configuration
 
-`src/main/resources/application.properties`:
+Create `src/main/resources/application.properties` or provide equivalent environment-specific configuration:
 
 ```properties
 spring.application.name=LMSYS
@@ -260,7 +281,9 @@ java -jar target/LMSYS-0.0.1-SNAPSHOT.jar
 | `GET` | `/api/books` | Get all books |
 | `GET` | `/api/books?available=true` | Get books where `availableCopies > 0` |
 | `GET` | `/api/books/{id}` | Get a book by ID |
-| `POST` | `/api/books` | Add a new book |
+| `POST` | `/api/books` | Add a new book. Requires `ROLE_ADMIN` |
+| `PUT` | `/api/books/{id}` | Update a book by ID. Requires `ROLE_ADMIN` |
+| `DELETE` | `/api/books/{id}` | Delete a book by ID. Requires `ROLE_ADMIN` |
 
 ### Members
 
@@ -275,7 +298,7 @@ java -jar target/LMSYS-0.0.1-SNAPSHOT.jar
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `POST` | `/api/auth/login` | Log in with member email and password |
+| `POST` | `/api/auth/login` | Log in with member or admin email and password |
 | `POST` | `/api/auth/logout` | Log out and invalidate the current token |
 
 ### Borrowing
@@ -301,6 +324,8 @@ java -jar target/LMSYS-0.0.1-SNAPSHOT.jar
 
 `POST /api/books`
 
+Requires an admin token.
+
 ```json
 {
   "title": "Clean Code",
@@ -320,6 +345,24 @@ Validation:
 | `isbn` | Required, not blank, unique |
 | `totalCopies` | Required, minimum `1` |
 | `availableCopies` | Required, minimum `0`, cannot exceed `totalCopies` |
+
+### Update Book
+
+`PUT /api/books/{id}`
+
+Requires an admin token. Uses the same request body and validation rules as add book.
+
+### Delete Book
+
+`DELETE /api/books/{id}`
+
+Requires an admin token. A book can be deleted only when:
+
+- `availableCopies == totalCopies`
+- no active borrow records exist
+- no borrow history exists
+
+Successful delete returns `204 No Content`.
 
 ### Register Member
 
@@ -352,7 +395,7 @@ Successful registration response:
 }
 ```
 
-### Login Member
+### Login
 
 `POST /api/auth/login`
 
@@ -370,14 +413,28 @@ Validation:
 | `email` | Required, valid email format |
 | `password` | Required, not blank |
 
-Successful login response:
+Successful member login response:
 
 ```json
 {
+  "role": "MEMBER",
   "memberId": 7,
   "name": "Vijay",
   "email": "vijay@gmail.com",
   "memberSince": "2026-06-01",
+  "token": "eyJhbGciOiJIUzI1NiJ9...",
+  "expiresIn": 86400000
+}
+```
+
+Successful admin login response:
+
+```json
+{
+  "role": "ADMIN",
+  "adminId": 1,
+  "name": "Admin",
+  "email": "admin@example.com",
   "token": "eyJhbGciOiJIUzI1NiJ9...",
   "expiresIn": 86400000
 }
@@ -469,11 +526,13 @@ Validation:
 
 ```json
 {
-  "id": 1,
+  "notificationId": 1,
+  "borrowId": 1,
   "memberId": 1,
-  "borrowRecordId": 1,
+  "bookTitle": "Clean Code",
   "message": "Book is due soon",
-  "notificationType": "DUE_SOON",
+  "type": "DUE_SOON",
+  "dueDate": "2026-06-15",
   "createdAt": "2026-06-01T09:00:00",
   "read": false
 }
@@ -490,6 +549,9 @@ Validation:
 | Return updates inventory | Successful return increments `availableCopies` by `1` and sets `returnDate`. |
 | Duplicate active borrow blocked | A member cannot borrow the same book again until it is returned. |
 | Duplicate ISBN blocked | Adding a book with an existing ISBN returns conflict. |
+| Book writes are admin-only | Adding, updating, patching, and deleting books require an admin token. |
+| Book update uses a write lock | Updating book inventory fields uses a pessimistic write lock. |
+| Book delete is restricted | Deleting a book requires all copies to be available and no borrow history. |
 | Duplicate email blocked | Registering a member with an existing email returns conflict. |
 | Already returned blocked | Returning the same borrow record twice returns bad request. |
 
@@ -527,13 +589,13 @@ Deleting a notification dismisses it from the member's notification list. The da
 | --- | --- | --- |
 | `200 OK` | Successful request | Fetching data, returning a book, marking notification read |
 | `201 Created` | Resource created | Adding book, registering member, borrowing book |
-| `204 No Content` | Successful delete | Dismissing a notification |
+| `204 No Content` | Successful delete | Deleting a book, dismissing a notification |
 | `400 Bad Request` | Invalid input or invalid action | Validation failure, unavailable book, already returned record |
 | `401 Unauthorized` | Login rejected | Invalid email or password |
 | `401 Unauthorized` | Authentication failed | Missing, invalid, tampered, expired, or inactive JWT |
 | `403 Forbidden` | Access denied | Valid JWT but insufficient permissions |
 | `404 Not Found` | Missing resource | Book, member, borrow record, or notification not found |
-| `409 Conflict` | Business conflict | Duplicate ISBN, duplicate email, duplicate active borrow |
+| `409 Conflict` | Business conflict | Duplicate ISBN, duplicate email, duplicate active borrow, blocked book delete |
 | `500 Internal Server Error` | Unexpected server error | Unhandled exceptions |
 
 ## Error Response
@@ -576,8 +638,24 @@ Add a book:
 ```bash
 curl -X POST http://localhost:8080/api/books \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer <admin-token>" \
   -d "{\"title\":\"Clean Code\",\"author\":\"Robert C. Martin\",\"isbn\":\"9780132350884\",\"totalCopies\":5,\"availableCopies\":5}"
+```
+
+Update a book:
+
+```bash
+curl -X PUT http://localhost:8080/api/books/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <admin-token>" \
+  -d "{\"title\":\"Clean Code\",\"author\":\"Robert C. Martin\",\"isbn\":\"9780132350884\",\"totalCopies\":6,\"availableCopies\":6}"
+```
+
+Delete a book:
+
+```bash
+curl -X DELETE http://localhost:8080/api/books/1 \
+  -H "Authorization: Bearer <admin-token>"
 ```
 
 Register a member:
@@ -588,7 +666,7 @@ curl -X POST http://localhost:8080/api/members/register \
   -d "{\"name\":\"Vijay\",\"email\":\"vijay@gmail.com\",\"password\":\"vijay123\"}"
 ```
 
-Login as a member:
+Login as a member or admin:
 
 ```bash
 curl -X POST http://localhost:8080/api/auth/login \
@@ -659,10 +737,12 @@ Use these endpoints and fields directly in your frontend:
 | Available books view | `GET /api/books?available=true` |
 | Book details | `GET /api/books/{id}` |
 | Add book form | `POST /api/books` |
+| Update book form | `PUT /api/books/{id}` |
+| Delete book action | `DELETE /api/books/{id}` |
 | Member list | `GET /api/members` |
 | Member registration form | `POST /api/members/register` |
-| Member login form | `POST /api/auth/login` |
-| Member logout action | `POST /api/auth/logout` |
+| Member/admin login form | `POST /api/auth/login` |
+| Member/admin logout action | `POST /api/auth/logout` |
 | Member profile | `GET /api/members/{id}` |
 | Member borrow history | `GET /api/members/{id}/history` |
 | Borrow form | `POST /api/borrow` |
@@ -678,6 +758,7 @@ Recommended frontend handling:
 - Show `message` from error responses in form or toast errors.
 - After registration, display the member ID from `response.memberId`.
 - After login, store `response.token` and send it as `Authorization: Bearer ${token}` for protected requests.
+- Use `response.role` to show member or admin UI. Only show book create/update/delete controls for `ADMIN`.
 - Use `response.expiresIn` to schedule re-authentication or token cleanup.
 - On logout, call `POST /api/auth/logout`, then remove the stored token and member state.
 - Treat `400`, `401`, `404`, and `409` as expected user-facing errors.
@@ -688,6 +769,12 @@ Recommended frontend handling:
 ## Testing Checklist
 
 - Add a valid book.
+- Confirm a member token cannot add, update, or delete a book.
+- Confirm an admin token can add, update, and delete a book.
+- Update a book by ID.
+- Delete a book with no borrow history and all copies available.
+- Try deleting a book while copies are borrowed.
+- Try deleting a book with borrow history.
 - Try adding a duplicate ISBN.
 - Get all books.
 - Filter available books.
